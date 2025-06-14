@@ -1,0 +1,8 @@
+file structure wasserstoff-AiInternTask/
+├── backend/
+│   ├── app/
+│   │   └── main.py              # FastAPI server
+│   └── requirements.txt         # Backend dependencies
+├── frontend/
+│   ├── app.py                   # Streamlit frontend
+│   └── requirements.txt         # Frontend dependencies
