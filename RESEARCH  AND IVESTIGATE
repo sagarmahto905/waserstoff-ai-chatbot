@@ -1,1 +1,149 @@
+from pathlib import Path
+
+# Create the base folder
+base = Path("/mnt/data/wasserstoff-AiInternTask")
+backend = base / "backend" / "app"
+frontend = base / "frontend"
+
+# Ensure directories exist
+backend.mkdir(parents=True, exist_ok=True)
+frontend.mkdir(parents=True, exist_ok=True)
+
+# File contents from the canvas
+
+main_py = '''from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import os
+import shutil
+from typing import List
+from uuid import uuid4
+
+# === DEPENDENCY SAFETY CHECK ===
+try:
+    import ssl
+except ImportError:
+    raise ImportError("The ssl module is missing. Please use a Python version compiled with OpenSSL support.")
+
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    raise ImportError("PyMuPDF (fitz) is not installed. Run: pip install pymupdf")
+
+try:
+    import chromadb
+except ImportError:
+    raise ImportError("chromadb is not installed. Run: pip install chromadb")
+
+try:
+    import openai
+except ImportError:
+    raise ImportError("openai package is not installed. Run: pip install openai")
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+UPLOAD_DIR = "temp_uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+chroma_client = chromadb.Client()
+chroma_collection = chroma_client.create_collection(name="docs")
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+@app.post("/upload")
+async def upload(file: UploadFile = File(...)):
+    try:
+        file_path = os.path.join(UPLOAD_DIR, file.filename)
+        with open(file_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        doc = fitz.open(file_path)
+        for i, page in enumerate(doc):
+            text = page.get_text()
+            chroma_collection.add(
+                documents=[text],
+                metadatas=[{"doc": file.filename, "page": i + 1}],
+                ids=[str(uuid4())]
+            )
+
+        return {"status": "Uploaded", "pages": len(doc)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/query")
+def query_documents(question: str):
+    try:
+        results = chroma_collection.query(query_texts=[question], n_results=5)
+        chunks = [doc for doc in results["documents"][0]]
+        metadatas = results["metadatas"][0]
+
+        prompt = f"""
+        Based on the following chunks of text from multiple documents, answer the question:
+        Question: {question}
+        Chunks:
+        {'\\n\\n'.join(chunks)}
+        Provide themes and citations per document.
+        """
+
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        summary = response["choices"][0]["message"]["content"]
+        return {"results": metadatas, "summary": summary}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))'''
+
+app_py = '''import streamlit as st
+import requests
+
+st.set_page_config(page_title="📚 Investigative Document Chatbot", layout="wide")
+st.title("📄 Research & Theme Chatbot")
+
+BACKEND_URL = "http://localhost:8000"
+
+uploaded_files = st.file_uploader("Upload PDFs or scanned files", type=["pdf"], accept_multiple_files=True)
+
+if uploaded_files:
+    for f in uploaded_files:
+        res = requests.post(f"{BACKEND_URL}/upload", files={"file": (f.name, f.getvalue())})
+        if res.ok:
+            st.success(f"Uploaded: {f.name}")
+        else:
+            st.error(f"Failed: {f.name} → {res.text}")
+
+st.subheader("Ask your question")
+question = st.text_input("Type a query about the uploaded documents")
+
+if st.button("Search"):
+    with st.spinner("Searching and analyzing themes..."):
+        res = requests.get(f"{BACKEND_URL}/query", params={"question": question})
+        if res.ok:
+            output = res.json()
+            st.markdown("## 🔍 Theme Summary")
+            st.write(output['summary'])
+            st.markdown("## 📄 Document Citations")
+            for r in output['results']:
+                st.write(f"**{r['doc']}** – Page {r['page']}")
+        else:
+            st.error("Query failed! Check backend logs or try again.")'''
+
+backend_reqs = "fastapi\nuvicorn\npymupdf\nchromadb\nopenai\npython-multipart"
+frontend_reqs = "streamlit\nrequests"
+
+# Write the files
+(backend / "main.py").write_text(main_py)
+(frontend / "app.py").write_text(app_py)
+(base / "backend" / "requirements.txt").write_text(backend_reqs)
+(base / "frontend" / "requirements.txt").write_text(frontend_reqs)
+
+base  # Path to downloadable folder
+
 
