@@ -1,3 +1,36 @@
 cd wasserstoff-AiInternTask/frontend
 pip install -r requirements.txt
 streamlit run app.py
+import streamlit as st
+import requests
+
+st.set_page_config(page_title="📚 Investigative Document Chatbot", layout="wide")
+st.title("📄 Research & Theme Chatbot")
+
+BACKEND_URL = "http://localhost:8000"  # Use actual deployed URL for production
+
+uploaded_files = st.file_uploader("Upload PDFs or scanned files", type=["pdf"], accept_multiple_files=True)
+
+if uploaded_files:
+    for f in uploaded_files:
+        res = requests.post(f"{BACKEND_URL}/upload", files={"file": (f.name, f.getvalue())})
+        if res.ok:
+            st.success(f"Uploaded: {f.name}")
+        else:
+            st.error(f"Failed: {f.name} → {res.text}")
+
+st.subheader("Ask your question")
+question = st.text_input("Type a query about the uploaded documents")
+
+if st.button("Search"):
+    with st.spinner("Searching and analyzing themes..."):
+        res = requests.get(f"{BACKEND_URL}/query", params={"question": question})
+        if res.ok:
+            output = res.json()
+            st.markdown("## 🔍 Theme Summary")
+            st.write(output['summary'])
+            st.markdown("## 📄 Document Citations")
+            for r in output['results']:
+                st.write(f"**{r['doc']}** – Page {r['page']}")
+        else:
+            st.error("Query failed! Check backend logs or try again.")
