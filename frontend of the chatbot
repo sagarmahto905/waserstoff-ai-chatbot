@@ -1,0 +1,3 @@
+cd wasserstoff-AiInternTask/frontend
+pip install -r requirements.txt
+streamlit run app.py
