@@ -2,3 +2,77 @@ cd wasserstoff-AiInternTask/backend
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import os
+import shutil
+from uuid import uuid4
+
+try:
+    import ssl
+    import fitz  # PyMuPDF
+    import chromadb
+    import openai
+except ImportError as e:
+    raise ImportError(f"Missing required module: {e.name}. Install it via pip.")
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+UPLOAD_DIR = "temp_uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+chroma_client = chromadb.Client()
+chroma_collection = chroma_client.create_collection(name="docs")
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+@app.post("/upload")
+async def upload(file: UploadFile = File(...)):
+    try:
+        file_path = os.path.join(UPLOAD_DIR, file.filename)
+        with open(file_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        doc = fitz.open(file_path)
+        for i, page in enumerate(doc):
+            text = page.get_text()
+            chroma_collection.add(
+                documents=[text],
+                metadatas=[{"doc": file.filename, "page": i + 1}],
+                ids=[str(uuid4())]
+            )
+
+        return {"status": "Uploaded", "pages": len(doc)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/query")
+def query_documents(question: str):
+    try:
+        results = chroma_collection.query(query_texts=[question], n_results=5)
+        chunks = results["documents"][0]
+        metadatas = results["metadatas"][0]
+
+        prompt = f"""
+        Based on the following chunks of text from multiple documents, answer the question:
+        Question: {question}
+        Chunks:
+        {'\\n\\n'.join(chunks)}
+        Provide themes and citations per document.
+        """
+
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        summary = response["choices"][0]["message"]["content"]
+        return {"results": metadatas, "summary": summary}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
